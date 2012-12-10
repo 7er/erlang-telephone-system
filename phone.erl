@@ -18,13 +18,14 @@ cast(Pid, Message) ->
     
          
 init(Line) ->
+    line:attach(Line),
     state_on_hook(Line).
 
 
 state_on_hook(Line) ->
     receive 
         {cast, off_hook} ->
-            ok = line:acquire(Line),
+            ok = line:off_hook(Line),
             dial_tone(Line);
         {media, Line, dial} ->
             ringing(Line)
@@ -55,6 +56,8 @@ dial_tone(Line) ->
             ok = line:connect(Line, LineNumber),
             line:media(Line, dial),
             connecting(Line)
+    after 1500 ->
+            dial_tone(Line)
     end.
 
 ring_in_ear() ->

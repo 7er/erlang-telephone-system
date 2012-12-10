@@ -1,44 +1,75 @@
 -module(telephone_tests).
 -include_lib("eunit/include/eunit.hrl").
 
-test_line_acquire({{OurLine, _}, _}) ->
-    fun() ->            
-            ok = line:acquire(OurLine),
-            error = line:acquire(OurLine)
+
+test_off_hook_must_first_attach({OurLineNumber, _}) ->
+    fun() ->     
+            error = line:off_hook(OurLineNumber),
+            ok = line:attach(OurLineNumber),
+            ok = line:off_hook(OurLineNumber),
+            error = line:off_hook(OurLineNumber)
     end.
 
-test_line_release({{OurLine, _}, _}) ->
+test_on_hook({OurLineNumber, _}) ->
     fun() ->
-            ok = line:acquire(OurLine),
-            ok = line:release(OurLine),
-            error = line:release(OurLine),
-            ok = line:acquire(OurLine)
+            ok = line:attach(OurLineNumber),
+            ok = line:off_hook(OurLineNumber),
+            ok = line:on_hook(OurLineNumber),
+            error = line:on_hook(OurLineNumber),
+            ok = line:off_hook(OurLineNumber)
     end.
 
-test_line_connect({{OurLine, _}, {OtherLine ,_}}) ->
+dial_should_fail_before_offhook_of_caller({LineNumber, OtherLineNumber}) ->
     fun() ->
-            error = line:connect(OurLine, OtherLine)
+            error = line:dial(LineNumber, OtherLineNumber),
+            line:attach(LineNumber),
+            error = line:dial(LineNumber, OtherLineNumber)            
     end.
-        
 
+dial_only_works_when_both_lines_are_attached_and_caller_is_off_hook({Alice, Bob}) ->
+    fun() ->
+            ok = line:attach(Alice),
+            ok = line:attach(Bob),
+            ok = line:off_hook(Alice),
+            ok = line:dial(Alice, Bob),
+            ok = line:off_hook(Bob),
+            
 
-single_line_test_() ->
+            %% Bob ! {media, self(), "skviggeribu"},
+            %% BobPid = whereis(Bob),
+            %% receive
+            %%     Anything ->
+            %%         ?assertEqual({media, BobPid, "skviggeribu"}, Anything)
+            %% end,
+            ok = line:on_hook(Alice)
+            
+    end.
+
+line_test_() ->
     {foreach, 
      fun() -> setup() end,
-     fun({{Pid, LineNumber}, {Other_Pid, Other_LineNumber}}) -> 
-             true = unregister(LineNumber), true = exit(Pid, normal), 
-             true = unregister(Other_LineNumber), true = exit(Other_Pid, normal) end,
+     fun({LineNumber, OtherLineNumber}) -> 
+             true = exit(whereis(LineNumber), normal),
+             true = unregister(LineNumber), 
+             true = exit(whereis(OtherLineNumber), normal),
+             true = unregister(OtherLineNumber)
+     end,
      [
-      fun test_line_acquire/1,
-      fun test_line_release/1,
-      fun test_line_connect/1
+      fun test_off_hook_must_first_attach/1,
+      fun test_on_hook/1,
+      fun dial_should_fail_before_offhook_of_caller/1,
+      fun dial_only_works_when_both_lines_are_attached_and_caller_is_off_hook/1
+      % fun should_disconnect_when_we_release_initiator_side_of_connection/1
+      %fun simulate_dialing/1
      ]
     }.
 
 setup() ->              
     LineNumber = syver@cisco.com,
-    Other_LineNumber = elias@cisco.com,
-    {{line:start(LineNumber), LineNumber}, {line:start(Other_LineNumber), Other_LineNumber}}.
+    OtherLineNumber = elias@cisco.com,
+    line:start(LineNumber),
+    line:start(OtherLineNumber),
+    {LineNumber, OtherLineNumber}.
     
               
     
