@@ -13,15 +13,17 @@ off_hook(LineNumber) -> call(LineNumber, off_hook).
 
 on_hook(LineNumber) -> call(LineNumber, on_hook).
 
-dial(LineNumber, OtherLine) ->
-    call(LineNumber, {dial, OtherLine}).
+dial(LineNumber, OtherLine) when is_atom(OtherLine) ->
+    dial(LineNumber, whereis(OtherLine));
+dial(LineNumber, OtherLinePid) when is_pid(OtherLinePid) ->
+    call(LineNumber, {dial, OtherLinePid}).
 
 media(LineNumber, Message) -> 
     LineNumber ! {media, self(), Message}.
 
-
-call(LineNumber, Message) ->
-    Pid = whereis(LineNumber),
+call(RegisteredProcess, Message) when is_atom(RegisteredProcess) ->
+    call(whereis(RegisteredProcess), Message);
+call(Pid, Message) when is_pid(Pid) ->
     Pid ! {request, self(), Message},
     receive
         {reply, Pid, Reply} -> Reply
@@ -69,8 +71,8 @@ loop_dial_tone(Phone) ->
             reply(Phone, ok),
             loop_idle(Phone);
         {request, Phone, {dial, OtherLine}} ->
-            ok = connect(OtherLine),
             reply(Phone, ok),
+            ok = connect(OtherLine),
             loop_calling(Phone, OtherLine);
         {request, Pid, _} -> 
             reply(Pid, error),
@@ -119,7 +121,7 @@ loop_speech(Phone, OtherLine, outgoing=Direction) ->
     receive
         {request, Phone, on_hook} ->
             ok = disconnect(OtherLine),
-            reply(Phone, ballerusk),
+            reply(Phone, ok),
             loop_idle(Phone);
         {request, Pid, _} ->
             reply(Pid, error),

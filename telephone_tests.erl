@@ -35,12 +35,12 @@ dial_only_works_when_both_lines_are_attached_and_caller_is_off_hook({Alice, Bob}
             ok = line:off_hook(Bob),
             
 
-            %% Bob ! {media, self(), "skviggeribu"},
-            %% BobPid = whereis(Bob),
-            %% receive
-            %%     Anything ->
-            %%         ?assertEqual({media, BobPid, "skviggeribu"}, Anything)
-            %% end,
+            Alice ! {media, self(), "skviggeribu"},
+            BobPid = whereis(Bob),
+            receive
+                Anything ->
+                    ?assertEqual({media, BobPid, "skviggeribu"}, Anything)
+            end,
             ok = line:on_hook(Alice)
             
     end.
