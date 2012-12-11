@@ -1,149 +1,103 @@
 -module(line).
--export([start/1, off_hook/1, on_hook/1, dial/2, media/2, attach/1]).
--export([init/0]).
+-behaviour(gen_fsm).
 
-% API 
+-export([start/1, off_hook/1, on_hook/1, dial/2, media/2, attach/1]).
+-export([idle/3, wait_for_attach/3, dial_tone/3, ringing/3, calling/2, calling/3, 
+         speech/3, wait_on_hook/3]).
+-export([init/1, terminate/3, code_change/4, handle_info/3, handle_event/3, handle_sync_event/4]).
+
+
 start(LineNumberAtom) ->
-    register(LineNumberAtom, spawn(line, init, [])).
+    gen_fsm:start({local, LineNumberAtom}, line, [], []).
 
 attach(LineNumber) ->
-    call(LineNumber, attach).
+    gen_fsm:sync_send_event(LineNumber, attach).
 
-off_hook(LineNumber) -> call(LineNumber, off_hook).
+off_hook(LineNumber) -> gen_fsm:sync_send_event(LineNumber, off_hook).
 
-on_hook(LineNumber) -> call(LineNumber, on_hook).
+on_hook(LineNumber) -> gen_fsm:sync_send_event(LineNumber, on_hook).
 
 dial(LineNumber, OtherLine) when is_atom(OtherLine) ->
     dial(LineNumber, whereis(OtherLine));
 dial(LineNumber, OtherLinePid) when is_pid(OtherLinePid) ->
-    call(LineNumber, {dial, OtherLinePid}).
+    gen_fsm:sync_send_event(LineNumber, {dial, OtherLinePid}).
 
 media(LineNumber, Message) -> 
     LineNumber ! {media, self(), Message}.
 
-call(RegisteredProcess, Message) when is_atom(RegisteredProcess) ->
-    call(whereis(RegisteredProcess), Message);
-call(Pid, Message) when is_pid(Pid) ->
-    Pid ! {request, self(), Message},
-    receive
-        {reply, Pid, Reply} -> Reply
-    end.
+init(_) ->
+    {ok, wait_for_attach, []}.
 
 
-% internals
-reply(Pid, Message) ->
-    Pid ! {reply, self(), Message}.
+% internal event functions
+connect(OtherLine) -> gen_fsm:sync_send_event(OtherLine, connect).
+disconnect(OtherLine) -> gen_fsm:sync_send_event(OtherLine, disconnect).
+answer(OtherLine) -> gen_fsm:send_event(OtherLine, answer).
+     
 
 
-init() ->
-    loop_wait_for_attach().
 
-connect(OtherLine) -> call(OtherLine, connect).
-disconnect(OtherLine) -> call(OtherLine, disconnect).
-    
-    
-loop_wait_for_attach() ->
-    receive 
-        {request, Phone, attach} ->
-            reply(Phone, ok),
-            loop_idle(Phone);
-         {request, Pid, _} ->
-            reply(Pid, error),
-            loop_wait_for_attach()
-    end.
+wait_for_attach(attach, {Phone, _}, []) ->
+    {reply, ok, idle, Phone};
+wait_for_attach(_, _, []) ->
+    {reply, error, wait_for_attach, []}.
 
-loop_idle(Phone) ->
-    receive 
-        {request, Phone, off_hook} ->
-            reply(Phone, ok),
-            loop_dial_tone(Phone);
-        {request, ConnectingLine, connect} ->
-            reply(ConnectingLine, ok),
-            loop_ringing(Phone, ConnectingLine);
-        {request, Pid, _} -> 
-            reply(Pid, error),
-            loop_idle(Phone)
-    end.
+idle(off_hook, {Phone, _}, Phone) ->
+    {reply, ok, dial_tone, Phone};
+idle(connect, {ConnectingLine, _}, Phone) ->
+    {reply, ok, ringing, {Phone, ConnectingLine}};
+idle(_, _, Phone) ->
+    {reply, error, idle, Phone}.
 
-loop_dial_tone(Phone) ->
-    receive
-        {request, Phone, on_hook} ->
-            reply(Phone, ok),
-            loop_idle(Phone);
-        {request, Phone, {dial, OtherLine}} ->
-            reply(Phone, ok),
-            ok = connect(OtherLine),
-            loop_calling(Phone, OtherLine);
-        {request, Pid, _} -> 
-            reply(Pid, error),
-            loop_dial_tone(Phone)
-    end.
+dial_tone(on_hook, {Phone, _}, Phone) ->
+    {reply, ok, idle, Phone};
+dial_tone({dial, OtherLine}, {Phone, _}, Phone) ->
+    ok = connect(OtherLine),
+    {reply, ok, calling, {Phone, OtherLine}};
+dial_tone(_, _, Phone) ->
+    {reply, error, dial_tone, Phone}.
 
-loop_wait_on_hook(Phone) ->
-    receive
-        {request, Phone, on_hook} ->
-            reply(Phone, ok),
-            loop_idle(Phone);
-        {request, Pid, _} -> 
-            reply(Pid, error),
-            loop_wait_on_hook(Phone)
-    end.        
 
-loop_ringing(Phone, ConnectingLine) ->
-    receive 
-        {request, ConnectingLine, disconnect} ->
-            reply(ConnectingLine, ok),
-            loop_idle(Phone);
-         {request, Phone, off_hook} ->
-            reply(Phone, ok),
-            ConnectingLine ! {cast, self(), answer},
-            loop_speech(Phone, ConnectingLine, incoming);
-        {request, Pid, _} ->
-            reply(Pid, error),
-            loop_ringing(Phone, ConnectingLine)
-    end.
+ringing(disconnect, {ConnectingLine, _}, {Phone, ConnectingLine}) ->
+    {reply, ok, idle, Phone};
+ringing(off_hook, {Phone, _}, {Phone, ConnectingLine}) ->
+    answer(ConnectingLine),
+    {reply, ok, speech, {Phone, ConnectingLine, incoming}}.
             
 
-loop_calling(Phone, OtherLine) ->
-    receive                                           
-        {request, Phone, on_hook} ->
-            ok = disconnect(OtherLine),
-            reply(Phone, ok),
-            loop_idle(Phone);
-        {cast, OtherLine, answer} ->            
-            loop_speech(Phone, OtherLine, outgoing);
-        {request, Pid, _} ->
-            reply(Pid, error),
-            loop_calling(Phone, OtherLine)
-    end.
+calling(on_hook, {Phone, _}, {Phone, OtherLine}) ->
+    ok = disconnect(OtherLine),
+    {reply, ok, idle, Phone}.
 
-loop_speech(Phone, OtherLine, outgoing=Direction) ->
-    receive
-        {request, Phone, on_hook} ->
-            ok = disconnect(OtherLine),
-            reply(Phone, ok),
-            loop_idle(Phone);
-        {request, Pid, _} ->
-            reply(Pid, error),
-            loop_speech(Phone, OtherLine, Direction);
-        Anything ->
-            OtherLine ! Anything,
-            loop_speech(Phone, OtherLine, Direction)
-    end;
-loop_speech(Phone, ConnectingLine, incoming=Direction) ->
-    receive 
-        {request, ConnectingLine, disconnect} ->
-            reply(ConnectingLine, ok),
-            loop_wait_on_hook(Phone);
-        {request, Pid, _} ->
-            reply(Pid, error),
-            loop_speech(Phone, ConnectingLine, Direction);
-        {media, Pid, Content} ->
-            Phone ! {media, self(), Content},
-            loop_speech(Phone, ConnectingLine, Direction)
-    end.
+calling(answer, {Phone, OtherLine}) ->
+    {next_state, speech, {Phone, OtherLine, outgoing}}.
 
 
-        
+speech(on_hook, {Phone, _}, {Phone, OtherLine, outgoing}) ->
+    ok = disconnect(OtherLine),
+    {reply, ok, idle, Phone};
+speech(disconnect, {ConnectingLine, _}, {Phone, ConnectingLine, incoming}) ->
+    {reply, ok, wait_on_hook, Phone}.
+
+
+handle_info({media, Phone, Content}, speech, {Phone, OtherLine, outgoing}=State) ->
+    media(OtherLine, Content),
+    {next_state, speech, State};
+handle_info({media, ConnectingLine, Content}, speech, {Phone, ConnectingLine, incoming}=State) ->
+    media(Phone, Content),
+    {next_state, speech, State}.
+
+wait_on_hook(on_hook, {Phone, _}, Phone) ->
+    {reply, ok, idle, Phone}.    
+    
+terminate(normal, _, _) ->        
+    ok.
             
 
+code_change(_OldVsn, StateName, StateData, _Extra) -> {ok, StateName, StateData}.
+
+handle_event(_Event, StateName, StateData) ->
+    {next_state, StateName, StateData}.
+
+handle_sync_event(_Event, _From, StateName, StateData) -> 
+    {reply, error, StateName, StateData}.
